@@ -48,6 +48,23 @@ func NewServer(c *cache.Cache, ghClient *github.Client, log *logrus.Logger) *Ser
 	)
 
 	mcpSrv.AddTool(tool, s.handleResolve)
+
+	upgradeTool := mcpgo.NewTool("upgrade_github_action",
+		mcpgo.WithDescription(
+			"Finds the latest published release of a GitHub Action and returns its pinned commit hash. "+
+				"Use this to upgrade an action to its newest version while keeping it securely pinned. "+
+				"Pre-releases are excluded.",
+		),
+		mcpgo.WithString("action",
+			mcpgo.Required(),
+			mcpgo.Description(
+				"GitHub action in 'owner/repo' format, e.g. 'actions/checkout'. "+
+					"A version suffix like '@v3' is accepted but ignored — the latest release is always returned.",
+			),
+		),
+	)
+	mcpSrv.AddTool(upgradeTool, s.handleUpgrade)
+
 	s.mcpServer = mcpSrv
 	return s
 }
@@ -79,6 +96,65 @@ func (s *Server) handleResolve(ctx context.Context, req mcpgo.CallToolRequest) (
 	return mcpgo.NewToolResultText(
 		fmt.Sprintf("Pinned reference: %s\nCommit hash: %s%s", pinnedRef, hash, cacheNote),
 	), nil
+}
+
+func (s *Server) handleUpgrade(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	action, err := req.RequireString("action")
+	if err != nil {
+		return mcpgo.NewToolResultError("parameter 'action' is required"), nil
+	}
+	action = strings.TrimSpace(action)
+
+	owner, repo, err := github.ParseOwnerRepo(action)
+	if err != nil {
+		return mcpgo.NewToolResultError(fmt.Sprintf("invalid action %q: %v", action, err)), nil
+	}
+
+	repoPath := owner + "/" + repo
+	s.log.WithField("repo", repoPath).Info("MCP: upgrading to latest")
+
+	tag, hash, cached, err := s.resolveLatest(repoPath)
+	if err != nil {
+		s.log.WithError(err).WithField("repo", repoPath).Error("MCP: upgrade failed")
+		return mcpgo.NewToolResultError(fmt.Sprintf("failed to get latest for %q: %v", repoPath, err)), nil
+	}
+
+	cacheNote := ""
+	if cached {
+		cacheNote = " (from cache)"
+	}
+
+	return mcpgo.NewToolResultText(fmt.Sprintf(
+		"Latest version: %s\nPinned reference: %s@%s\nCommit hash: %s%s",
+		tag, repoPath, hash, hash, cacheNote,
+	)), nil
+}
+
+func (s *Server) resolveLatest(repoPath string) (tag, hash string, cached bool, err error) {
+	latestKey := "latest:" + repoPath
+
+	if t, ok := s.cache.Get(latestKey); ok {
+		if hh, ok := s.cache.Get(repoPath + "@" + t); ok {
+			return t, hh, true, nil
+		}
+	}
+
+	owner, repo, _ := strings.Cut(repoPath, "/")
+	tag, err = s.ghClient.LatestRelease(owner, repo)
+	if err != nil {
+		return "", "", false, err
+	}
+
+	if storeErr := s.cache.Set(latestKey, tag); storeErr != nil {
+		s.log.WithError(storeErr).Warn("MCP: failed to cache latest tag")
+	}
+
+	hash, _, err = s.resolve(repoPath + "@" + tag)
+	if err != nil {
+		return "", "", false, err
+	}
+
+	return tag, hash, false, nil
 }
 
 func (s *Server) resolve(action string) (hash string, cached bool, err error) {

@@ -24,8 +24,8 @@ Hashes are immutable. This tool automates the conversion.
 
 ## Features
 
-- **MCP server** — Claude can query it directly to pin actions while editing workflows
-- **REST API** — resolve actions over HTTP from scripts or other tools
+- **MCP server** — Claude can query it directly to pin or upgrade actions while editing workflows
+- **REST API** — resolve or upgrade actions over HTTP from scripts or other tools
 - **Disk cache** — BoltDB cache avoids redundant GitHub API calls; shared across sessions
 - **Annotated tag support** — correctly dereferences multi-level tag objects to the actual commit SHA
 
@@ -96,7 +96,16 @@ Or use the CLI:
 claude mcp add --transport http version-to-hash http://localhost:8080/mcp
 ```
 
-Once connected either way, open a new Claude Code session and run `/mcp` to confirm `version-to-hash` appears as connected. Then ask Claude to "pin all actions in this workflow" and it will use the `resolve_github_action` tool to resolve each one.
+Once connected either way, open a new Claude Code session and run `/mcp` to confirm `version-to-hash` appears as connected.
+
+Two MCP tools are available:
+
+| Tool | Input | What it does |
+|------|-------|--------------|
+| `resolve_github_action` | `owner/repo@version` | Resolves a specific tag to its pinned commit hash |
+| `upgrade_github_action` | `owner/repo` | Finds the latest release and returns its pinned commit hash |
+
+Ask Claude to "pin all actions in this workflow" to use `resolve_github_action`, or "upgrade all actions to their latest versions" to use `upgrade_github_action`.
 
 ## REST API
 
@@ -130,6 +139,38 @@ Example response:
 ```json
 {
   "action": "actions/checkout@v4",
+  "resolved": "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+  "hash": "11bd71901bbe5b1630ceea73d27597364c9af683",
+  "cached": false
+}
+```
+
+### `GET /latest?action=<owner/repo>`
+
+| Parameter | Description |
+|-----------|-------------|
+| `action` | Action in `owner/repo` format (version suffix is ignored if present) |
+
+### `POST /latest`
+
+Accepts a JSON body: `{ "action": "actions/checkout" }`
+
+Finds the latest published release (pre-releases excluded) and returns its pinned hash. Response fields:
+
+| Field | Description |
+|-------|-------------|
+| `action` | Canonical `owner/repo` |
+| `tag` | Latest release tag (e.g. `v4.2.2`) |
+| `resolved` | Full pinned reference ready to paste into a workflow |
+| `hash` | The 40-character commit SHA |
+| `cached` | Whether the result came from the local cache |
+
+Example response:
+
+```json
+{
+  "action": "actions/checkout",
+  "tag": "v4.2.2",
   "resolved": "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
   "hash": "11bd71901bbe5b1630ceea73d27597364c9af683",
   "cached": false

@@ -35,6 +35,24 @@ func NewClientWithBaseURL(token, baseURL string) *Client {
 	}
 }
 
+// ParseOwnerRepo parses "owner/repo" or "owner/repo@ref" into owner and repo.
+// Any version suffix is stripped and ignored.
+func ParseOwnerRepo(action string) (owner, repo string, err error) {
+	s := action
+	if i := strings.Index(s, "@"); i >= 0 {
+		s = s[:i]
+	}
+	slash := strings.Index(s, "/")
+	if slash < 0 {
+		return "", "", fmt.Errorf("invalid action %q: expected owner/repo", action)
+	}
+	owner, repo = s[:slash], s[slash+1:]
+	if owner == "" || repo == "" {
+		return "", "", fmt.Errorf("invalid action %q: owner and repo must be non-empty", action)
+	}
+	return owner, repo, nil
+}
+
 // ParseRef parses "owner/repo@ref" into its components.
 func ParseRef(action string) (owner, repo, ref string, err error) {
 	at := strings.Index(action, "@")
@@ -164,6 +182,36 @@ func (c *Client) doGet(url string) (*http.Response, error) {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	return c.http.Do(req)
+}
+
+// LatestRelease returns the tag name of the latest published release for
+// owner/repo. Pre-releases are excluded (GitHub's /releases/latest semantics).
+func (c *Client) LatestRelease(owner, repo string) (string, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/releases/latest", c.baseURL, owner, repo)
+
+	resp, err := c.doGet(url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("no releases found for %s/%s", owner, repo)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GitHub API %s: HTTP %d", url, resp.StatusCode)
+	}
+
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return "", fmt.Errorf("decoding release response: %w", err)
+	}
+	if release.TagName == "" {
+		return "", fmt.Errorf("latest release for %s/%s has no tag", owner, repo)
+	}
+	return release.TagName, nil
 }
 
 // isFullHash reports whether s is a valid 40-character hex commit hash.
