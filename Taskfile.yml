@@ -1,0 +1,129 @@
+version: '3'
+
+vars:
+  BINARY: bin/version-to-hash
+  IMAGE: version-to-hash
+  IMAGE_TAG: dev
+
+tasks:
+  default:
+    desc: List available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  build:
+    desc: Build the Go binary to ./bin/
+    cmds:
+      - mkdir -p bin
+      - go build -ldflags="-s -w" -o {{.BINARY}} ./cmd/server
+    sources:
+      - '**/*.go'
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.BINARY}}'
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./...
+
+  test:verbose:
+    desc: Run all tests with verbose output and race detector
+    cmds:
+      - go test -v -race ./...
+
+  test:cover:
+    desc: Run tests and open coverage report in browser
+    cmds:
+      - go test -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out
+
+  lint:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  run:
+    desc: Build and run the server locally on :8080
+    deps: [build]
+    cmds:
+      - '{{.BINARY}}'
+    env:
+      PORT: 8080
+      CACHE_PATH: /tmp/vth-cache.db
+      CACHE_TTL_HOURS: '24'
+      LOG_LEVEL: debug
+
+  tidy:
+    desc: Run go mod tidy
+    cmds:
+      - go mod tidy
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -rf bin/ coverage.out
+
+  docker:build:
+    desc: Build the Docker image
+    cmds:
+      - docker build -t {{.IMAGE}}:{{.IMAGE_TAG}} .
+
+  docker:run:
+    desc: Build and run the container on :8080 (cache persisted in a named volume)
+    deps: [docker:build]
+    cmds:
+      - |
+        docker run --rm \
+          -p 8080:8080 \
+          -v vth-cache:/data \
+          {{if .GITHUB_TOKEN}}-e GITHUB_TOKEN={{.GITHUB_TOKEN}}{{end}} \
+          {{.IMAGE}}:{{.IMAGE_TAG}}
+
+  docker:compose:up:
+    desc: Start services with docker compose
+    cmds:
+      - docker compose up -d
+
+  docker:compose:down:
+    desc: Stop docker compose services
+    cmds:
+      - docker compose down
+
+  docker:compose:logs:
+    desc: Tail docker compose logs
+    cmds:
+      - docker compose logs -f
+
+  resolve:
+    desc: "Resolve an action ref locally (usage: task resolve ACTION=actions/checkout@v4)"
+    requires:
+      vars: [ACTION]
+    cmds:
+      - 'curl -s "http://localhost:8080/resolve?action={{.ACTION}}" | jq .'
+
+  demo:
+    desc: Build, start the server, resolve actions/checkout@v4, then stop
+    cmds:
+      - task: build
+      - |
+        CACHE_PATH=/tmp/vth-demo.db PORT=18080 {{.BINARY}} &
+        SERVER_PID=$!
+        cleanup() { kill "$SERVER_PID" 2>/dev/null; }
+        trap cleanup EXIT
+
+        echo "Waiting for server..."
+        for i in $(seq 1 20); do
+          sleep 0.2
+          curl -sf http://localhost:18080/health >/dev/null 2>&1 && break
+        done
+
+        echo ""
+        echo "==> Resolving actions/checkout@v4"
+        curl -s "http://localhost:18080/resolve?action=actions/checkout@v4" | jq .
+
+        echo ""
+        echo "==> Second request (should be cached)"
+        curl -s "http://localhost:18080/resolve?action=actions/checkout@v4" | jq .cached

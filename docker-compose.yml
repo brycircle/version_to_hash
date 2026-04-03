@@ -1,0 +1,21 @@
+services:
+  version-to-hash:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - cache_data:/data
+    environment:
+      # Optional – set to increase the GitHub API rate limit from 60 to 5000 req/hr.
+      # GITHUB_TOKEN: your_token_here
+      CACHE_TTL_HOURS: "24"
+      LOG_LEVEL: "info"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  cache_data:
