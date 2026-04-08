@@ -156,6 +156,86 @@ func TestResolvePOST_Success(t *testing.T) {
 	}
 }
 
+func TestLatestGET_Success(t *testing.T) {
+	ghSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/actions/checkout/releases/latest":
+			json.NewEncoder(w).Encode(map[string]any{"tag_name": "v4.2.2"})
+		case "/repos/actions/checkout/git/ref/tags/v4.2.2":
+			json.NewEncoder(w).Encode(map[string]any{
+				"object": map[string]any{"type": "commit", "sha": fixedHash},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ghSrv.Close)
+	r := setupRouter(t, ghSrv)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/latest?action=actions/checkout", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+
+	var resp latestResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Tag != "v4.2.2" {
+		t.Errorf("tag = %q, want %q", resp.Tag, "v4.2.2")
+	}
+	if resp.Hash != fixedHash {
+		t.Errorf("hash = %q, want %q", resp.Hash, fixedHash)
+	}
+	if resp.Resolved != "actions/checkout@"+fixedHash {
+		t.Errorf("resolved = %q", resp.Resolved)
+	}
+}
+
+func TestLatestGET_VersionSuffixIgnored(t *testing.T) {
+	ghSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/actions/checkout/releases/latest":
+			json.NewEncoder(w).Encode(map[string]any{"tag_name": "v4.2.2"})
+		case "/repos/actions/checkout/git/ref/tags/v4.2.2":
+			json.NewEncoder(w).Encode(map[string]any{
+				"object": map[string]any{"type": "commit", "sha": fixedHash},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ghSrv.Close)
+	r := setupRouter(t, ghSrv)
+
+	w := httptest.NewRecorder()
+	// @v3 suffix should be ignored; latest (v4.2.2) is returned.
+	req := httptest.NewRequest(http.MethodGet, "/latest?action=actions/checkout@v3", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var resp latestResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Tag != "v4.2.2" {
+		t.Errorf("tag = %q, want v4.2.2", resp.Tag)
+	}
+}
+
+func TestLatestGET_MissingParam(t *testing.T) {
+	r := setupRouter(t, stubGitHub(t))
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/latest", nil)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
 func TestPinned(t *testing.T) {
 	tests := []struct {
 		action string

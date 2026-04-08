@@ -172,6 +172,75 @@ func TestResolveToHash_NotFound(t *testing.T) {
 	}
 }
 
+func TestParseOwnerRepo(t *testing.T) {
+	tests := []struct {
+		input       string
+		wantOwner   string
+		wantRepo    string
+		wantErrPart string
+	}{
+		{"actions/checkout", "actions", "checkout", ""},
+		{"actions/checkout@v4", "actions", "checkout", ""},
+		{"actions/setup-python@v5", "actions", "setup-python", ""},
+		{"noslash", "", "", "expected owner/repo"},
+		{"/repo", "", "", "non-empty"},
+		{"owner/", "", "", "non-empty"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			owner, repo, err := ParseOwnerRepo(tt.input)
+			if tt.wantErrPart != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErrPart)
+				}
+				if !containsStr(err.Error(), tt.wantErrPart) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErrPart)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if owner != tt.wantOwner || repo != tt.wantRepo {
+				t.Fatalf("got (%q, %q), want (%q, %q)", owner, repo, tt.wantOwner, tt.wantRepo)
+			}
+		})
+	}
+}
+
+func TestLatestRelease(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/actions/checkout/releases/latest" {
+			json.NewEncoder(w).Encode(map[string]any{"tag_name": "v4.2.2"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	c := &Client{http: srv.Client(), baseURL: srv.URL}
+	tag, err := c.LatestRelease("actions", "checkout")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tag != "v4.2.2" {
+		t.Fatalf("got %q, want %q", tag, "v4.2.2")
+	}
+}
+
+func TestLatestRelease_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	c := &Client{http: srv.Client(), baseURL: srv.URL}
+	_, err := c.LatestRelease("actions", "checkout")
+	if err == nil {
+		t.Fatal("expected error for missing releases, got nil")
+	}
+}
+
 func containsStr(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
 		func() bool {

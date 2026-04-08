@@ -1,3 +1,5 @@
 .task
 bin
 coverage.out
+
+.claude/
