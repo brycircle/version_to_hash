@@ -10,7 +10,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o version-to-hash ./cmd/server
 
 
-FROM alpine:3.19
+FROM alpine:3.23.4
 
 # ca-certificates is required for HTTPS calls to the GitHub API.
 RUN apk --no-cache add ca-certificates && \
